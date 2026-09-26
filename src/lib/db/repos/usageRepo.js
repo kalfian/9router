@@ -5,10 +5,9 @@ import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
   if (!key || typeof key !== "string") return null;
-  const trimmed = key.trim();
-  if (trimmed.length <= 8) return trimmed.charAt(0) + "***";
-  if (trimmed.length <= 14) return trimmed.slice(0, 4) + "..." + trimmed.slice(-3);
-  return trimmed.slice(0, 8) + "..." + trimmed.slice(-6);
+  if (key.length <= 12) return key.charAt(0) + "***";
+  // Keep the tail: keys sharing a machine-id prefix (team keys) must not collide.
+  return key.slice(0, 8) + "***" + key.slice(-4);
 }
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
@@ -290,7 +289,7 @@ export async function saveRequestUsage(entry) {
         ]
       );
 
-      // Increment usedTokens on apiKey if request used a key
+      // Keep per-key token limits in sync with completed usage records.
       if (entry.apiKey && typeof entry.apiKey === "string") {
         const cleanKey = entry.apiKey.trim();
         const totalTokens = (promptTokens || 0) + (completionTokens || 0);
@@ -377,9 +376,7 @@ export async function getUsageStats(period = "all") {
   let allApiKeys = [];
   try { allApiKeys = await getApiKeys(); } catch {}
   const apiKeyMap = {};
-  for (const k of allApiKeys) {
-    if (k.key) apiKeyMap[k.key.trim()] = { name: k.name, id: k.id, createdAt: k.createdAt };
-  }
+  for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
   const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
@@ -513,14 +510,14 @@ export async function getUsageStats(period = "all") {
         if (dateKey > (stats.byAccount[accountKey].lastUsed || "")) stats.byAccount[accountKey].lastUsed = dateKey;
       }
 
-      for (const [akRawKey, ak] of Object.entries(day.byApiKey || {})) {
+      for (const [, ak] of Object.entries(day.byApiKey || {})) {
         const rawModel = ak.rawModel || "";
         const provider = ak.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
-        const apiKeyVal = ak.apiKey ? ak.apiKey.trim() : null;
+        const apiKeyVal = ak.apiKey;
         const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
+        const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
         const apiKeyMasked = maskApiKey(apiKeyVal);
-        const keyName = keyInfo?.name || (apiKeyVal ? (apiKeyMasked || apiKeyVal.slice(0, 8) + "...") : "Local (No API Key)");
         const apiKeyKey = apiKeyMasked || "local-no-key";
         const akKey = apiKeyMasked ? `${apiKeyMasked}|${rawModel}|${provider || "unknown"}` : "local-no-key";
         if (!stats.byApiKey[akKey]) {
@@ -646,10 +643,9 @@ export async function getUsageStats(period = "all") {
       }
 
       if (r.apiKey && typeof r.apiKey === "string") {
-        const apiKeyVal = r.apiKey.trim();
-        const keyInfo = apiKeyMap[apiKeyVal];
+        const keyInfo = apiKeyMap[r.apiKey];
+        const keyName = keyInfo?.name || r.apiKey.slice(0, 8) + "...";
         const apiKeyMasked = maskApiKey(r.apiKey);
-        const keyName = keyInfo?.name || (apiKeyMasked || r.apiKey.slice(0, 8) + "...");
         const akKey = `${apiKeyMasked}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey: apiKeyMasked, lastUsed: r.timestamp };
