@@ -44,6 +44,14 @@ const deleteNestedSection = (obj, dottedKey) => {
   delete cur[keys[keys.length - 1]];
 };
 
+// TOML tables apply to every following key. Keep scalar root settings before
+// tables so a new root setting is never serialized inside [agents] or a
+// provider table parsed from an existing config.
+const rootFieldsBeforeTables = (obj) => Object.fromEntries([
+  ...Object.entries(obj).filter(([, value]) => value === null || typeof value !== "object" || Array.isArray(value)),
+  ...Object.entries(obj).filter(([, value]) => value !== null && typeof value === "object" && !Array.isArray(value)),
+]);
+
 // Write the 9Router model catalog so Codex's /model picker lists routable
 // (prefixed) ids instead of bare bundled slugs. Fail-open: returns a warning
 // instead of throwing so Apply still succeeds without the catalog.
@@ -200,8 +208,8 @@ export async function POST(request) {
     const catalog = await writeModelCatalog([model, subagentModel]);
     if (catalog.catalogPath) parsed.model_catalog_json = catalog.catalogPath;
 
-    // Write merged config
-    const configContent = stringifyTOML(parsed);
+    // Write merged config with scalar root settings before TOML tables.
+    const configContent = stringifyTOML(rootFieldsBeforeTables(parsed));
     await fs.writeFile(configPath, configContent);
 
     return NextResponse.json({
@@ -257,8 +265,8 @@ export async function DELETE() {
       delete parsed.model_catalog_json;
     }
 
-    // Write updated config
-    const configContent = stringifyTOML(parsed);
+    // Write updated config with scalar root settings before TOML tables.
+    const configContent = stringifyTOML(rootFieldsBeforeTables(parsed));
     await fs.writeFile(configPath, configContent);
 
     // Remove OPENAI_API_KEY from auth.json
